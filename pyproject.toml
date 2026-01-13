@@ -29,8 +29,9 @@ dependencies = [
     "ray[data]>=2.51.1",
     "pyarrow>=21.0.0",
     "numpy>=1.24.0",
-    "milvus-storage>=0.1.0",
+    "cffi>=1.15.0",
 ]
+# Note: milvus-storage is required but must be installed separately (not on PyPI)
 
 [project.optional-dependencies]
 dev = [
@@ -65,7 +66,7 @@ python_functions = "test_*"
 addopts = "-v"
 
 [tool.cibuildwheel]
-build = "cp310-* cp311-* cp312-*"
+build = "cp310-* cp311-*"  # Conan 1.x not compatible with Python 3.12
 skip = "*-musllinux*"
 test-requires = ["pytest", "pyarrow", "numpy"]
 test-command = "python -c \"from ray_milvus import MilvusDatasource; print('OK')\""
