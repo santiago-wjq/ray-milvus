@@ -10,19 +10,8 @@ on:
 
 jobs:
   build-wheels:
-    name: Build wheels on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-22.04
-            arch: x86_64
-          # Use macos-15-intel as abseil 20220623.0 doesn't support ARM64 (SSE4.1 instructions)
-          - os: macos-15-intel
-            arch: x86_64
-          - os: windows-latest
-            arch: AMD64
+    name: Build wheels on Linux
+    runs-on: ubuntu-22.04
 
     steps:
       - uses: actions/checkout@v4
@@ -38,7 +27,6 @@ jobs:
         id: milvus-storage
         run: |
           echo "commit=$(git -C milvus-storage rev-parse HEAD)" >> $GITHUB_OUTPUT
-        shell: bash
 
       # Cache native library build artifacts
       - name: Cache native library build
@@ -48,32 +36,29 @@ jobs:
           path: |
             milvus-storage/cpp/build
             milvus-storage/python/milvus_storage/lib
-          key: native-wheel-${{ runner.os }}-${{ matrix.arch }}-${{ steps.milvus-storage.outputs.commit }}
+          key: native-wheel-linux-x86_64-${{ steps.milvus-storage.outputs.commit }}
 
-      # Only restore Conan/ccache when native cache misses (Linux/macOS)
+      # Only restore Conan/ccache when native cache misses
       - name: Cache Conan packages
-        if: runner.os != 'Windows' && steps.cache-native.outputs.cache-hit != 'true'
+        if: steps.cache-native.outputs.cache-hit != 'true'
         uses: actions/cache@v4
         with:
           path: ~/.conan
-          key: conan-wheel-${{ runner.os }}-${{ matrix.arch }}-${{ steps.milvus-storage.outputs.commit }}
+          key: conan-wheel-linux-x86_64-${{ steps.milvus-storage.outputs.commit }}
           restore-keys: |
-            conan-wheel-${{ runner.os }}-${{ matrix.arch }}-
+            conan-wheel-linux-x86_64-
 
       - name: Cache ccache
-        if: runner.os != 'Windows' && steps.cache-native.outputs.cache-hit != 'true'
+        if: steps.cache-native.outputs.cache-hit != 'true'
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.ccache
-            ~/Library/Caches/ccache
-          key: ccache-wheel-${{ runner.os }}-${{ matrix.arch }}-${{ steps.milvus-storage.outputs.commit }}
+          path: ~/.ccache
+          key: ccache-wheel-linux-x86_64-${{ steps.milvus-storage.outputs.commit }}
           restore-keys: |
-            ccache-wheel-${{ runner.os }}-${{ matrix.arch }}-
+            ccache-wheel-linux-x86_64-
 
-      # Linux: Build native library if cache miss
-      - name: Install build dependencies (Linux)
-        if: runner.os == 'Linux' && steps.cache-native.outputs.cache-hit != 'true'
+      - name: Install build dependencies
+        if: steps.cache-native.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential ccache libssl-dev pkg-config
@@ -83,8 +68,8 @@ jobs:
           conan profile update settings.compiler.libcxx=libstdc++11 default
           conan remote add milvus https://milvus01.jfrog.io/artifactory/api/conan/default-conan-local --insert || true
 
-      - name: Build native library (Linux)
-        if: runner.os == 'Linux' && steps.cache-native.outputs.cache-hit != 'true'
+      - name: Build native library
+        if: steps.cache-native.outputs.cache-hit != 'true'
         run: |
           cd milvus-storage/cpp
           make python-lib
@@ -92,26 +77,6 @@ jobs:
           cp build/Release/libmilvus-storage.so ../python/milvus_storage/lib/
         env:
           CCACHE_DIR: ~/.ccache
-
-      # macOS: Build native library if cache miss
-      - name: Install build dependencies (macOS)
-        if: runner.os == 'macOS' && steps.cache-native.outputs.cache-hit != 'true'
-        run: |
-          brew install cmake ccache
-          pip install conan==1.61.0
-          conan profile new default --detect || true
-          conan profile update settings.compiler.libcxx=libc++ default
-          conan remote add milvus https://milvus01.jfrog.io/artifactory/api/conan/default-conan-local --insert || true
-
-      - name: Build native library (macOS)
-        if: runner.os == 'macOS' && steps.cache-native.outputs.cache-hit != 'true'
-        run: |
-          cd milvus-storage/cpp
-          WITH_AZURE=OFF make python-lib
-          mkdir -p ../python/milvus_storage/lib
-          cp build/Release/libmilvus-storage.dylib ../python/milvus_storage/lib/
-        env:
-          CCACHE_DIR: ~/Library/Caches/ccache
 
       - name: Install cibuildwheel
         run: pip install cibuildwheel==2.16.2
@@ -123,7 +88,7 @@ jobs:
           CIBW_BUILD: cp310-* cp311-*
           CIBW_SKIP: "*-musllinux*"
 
-          # Linux: Skip C++ build (already done), just copy library
+          # Linux configuration
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux2014
           CIBW_BEFORE_ALL_LINUX: |
             # Library already built and cached on host, just ensure it's in place
@@ -135,21 +100,6 @@ jobs:
           CIBW_REPAIR_WHEEL_COMMAND_LINUX: >
             auditwheel repair -w {dest_dir} {wheel} --plat manylinux2014_x86_64
 
-          # macOS: Skip C++ build (already done)
-          CIBW_BEFORE_ALL_MACOS: |
-            if [ ! -f {project}/milvus-storage/python/milvus_storage/lib/libmilvus-storage.dylib ]; then
-              echo "Error: Native library not found!"
-              exit 1
-            fi
-
-          CIBW_REPAIR_WHEEL_COMMAND_MACOS: >
-            delocate-wheel --require-archs {delocate_archs} -w {dest_dir} {wheel}
-
-          # Windows: Skip C++ build
-          CIBW_BUILD_WINDOWS: cp310-win_amd64
-          CIBW_BEFORE_ALL_WINDOWS: |
-            echo "Windows build - C++ library not yet supported"
-
           # Environment for all platforms
           CIBW_ENVIRONMENT: >
             MILVUS_STORAGE_LIB_DIR={project}/milvus-storage/python/milvus_storage/lib
@@ -159,32 +109,11 @@ jobs:
           CIBW_TEST_COMMAND: >
             python -c "from ray_milvus import MilvusDatasource; print('Import test passed')"
 
-          # Skip tests on Windows (no C++ library)
-          CIBW_TEST_SKIP: "*-win*"
-
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}-${{ matrix.arch }}
-          path: ./wheelhouse/*.whl
-
-  merge-wheels:
-    name: Merge wheel artifacts
-    needs: build-wheels
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download all wheel artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: wheelhouse
-          pattern: wheels-*
-          merge-multiple: true
-
-      - name: Upload merged wheels
-        uses: actions/upload-artifact@v4
-        with:
           name: wheels
-          path: wheelhouse/*.whl
+          path: ./wheelhouse/*.whl
 
   build-sdist:
     name: Build source distribution
