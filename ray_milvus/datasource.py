@@ -2,7 +2,7 @@
 Milvus datasource implementation for Ray Data.
 """
 
-from typing import Any, Dict, Iterator, List, Optional, Union
+from typing import Dict, Iterator, List, Optional, Union
 
 import numpy as np
 import pyarrow as pa

@@ -2,7 +2,6 @@
 Milvus datasink implementation for Ray Data.
 """
 
-import os
 from typing import Any, Dict, Iterable, Optional
 
 import pyarrow as pa

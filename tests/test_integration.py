@@ -2,12 +2,7 @@
 Integration tests for Milvus Ray datasource and datasink.
 """
 
-import os
-import tempfile
-
-import pyarrow as pa
 import pytest
-import ray
 
 
 def test_import():
