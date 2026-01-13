@@ -38,14 +38,38 @@ jobs:
       - name: Install cibuildwheel
         run: pip install cibuildwheel==2.16.2
 
-      - name: Cache Conan packages (Linux/macOS)
-        if: runner.os != 'Windows'
+      # Linux: Create cache directory and restore cache
+      - name: Create Conan cache directory (Linux)
+        if: runner.os == 'Linux'
+        run: mkdir -p ${{ github.workspace }}/.conan-cache
+
+      - name: Cache Conan packages (Linux)
+        if: runner.os == 'Linux'
         uses: actions/cache@v4
         with:
-          path: ~/.conan
-          key: conan-wheel-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('milvus-storage/cpp/conanfile.py') }}
+          path: ${{ github.workspace }}/.conan-cache
+          key: conan-wheel-linux-${{ matrix.arch }}-${{ hashFiles('milvus-storage/cpp/conanfile.py') }}
           restore-keys: |
-            conan-wheel-${{ runner.os }}-${{ matrix.arch }}-
+            conan-wheel-linux-${{ matrix.arch }}-
+
+      # macOS: Cache in home directory
+      - name: Cache Conan packages (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/cache@v4
+        with:
+          path: ~/.conan/data
+          key: conan-wheel-macos-${{ matrix.arch }}-${{ hashFiles('milvus-storage/cpp/conanfile.py') }}
+          restore-keys: |
+            conan-wheel-macos-${{ matrix.arch }}-
+
+      - name: Cache ccache (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/ccache
+          key: ccache-wheel-macos-${{ matrix.arch }}-${{ github.sha }}
+          restore-keys: |
+            ccache-wheel-macos-${{ matrix.arch }}-
 
       - name: Build wheels
         run: cibuildwheel --output-dir wheelhouse
@@ -54,11 +78,15 @@ jobs:
           CIBW_BUILD: cp310-* cp311-* cp312-*
           CIBW_SKIP: "*-musllinux*"
 
-          # Linux specific
+          # Linux specific - mount host cache into container
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux2014
+          CIBW_ENVIRONMENT_LINUX: >
+            CONAN_USER_HOME=/host/conan-cache
+            CCACHE_DIR=/host/ccache
+          CIBW_CONTAINER_ENGINE: "docker; create_args: -v ${{ github.workspace }}/.conan-cache:/host/conan-cache -v /tmp/ccache:/host/ccache"
           CIBW_BEFORE_ALL_LINUX: |
             yum install -y epel-release
-            yum install -y git openssl-devel wget
+            yum install -y git openssl-devel wget ccache
             # Install CMake
             wget -qO- "https://cmake.org/files/v3.27/cmake-3.27.5-linux-x86_64.tar.gz" | tar --strip-components=1 -xz -C /usr/local
             # Install Conan
@@ -77,7 +105,7 @@ jobs:
 
           # macOS specific
           CIBW_BEFORE_ALL_MACOS: |
-            brew install cmake
+            brew install cmake ccache
             pip install conan==1.61.0
             conan profile new default --detect || true
             conan profile update settings.compiler.libcxx=libc++ default
