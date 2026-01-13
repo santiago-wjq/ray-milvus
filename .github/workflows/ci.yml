@@ -52,45 +52,67 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Get milvus-storage commit ID
+        id: milvus-storage
+        run: |
+          echo "commit=$(git -C milvus-storage rev-parse HEAD)" >> $GITHUB_OUTPUT
+
+      # Cache native library build artifacts
+      - name: Cache native library build
+        id: cache-native
+        uses: actions/cache@v4
+        with:
+          path: |
+            milvus-storage/cpp/build
+            milvus-storage/python/milvus_storage/lib
+          key: native-linux-${{ steps.milvus-storage.outputs.commit }}
+
+      # Only restore Conan/ccache when native cache misses
+      - name: Cache Conan packages
+        if: steps.cache-native.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.conan
+          key: conan-linux-${{ steps.milvus-storage.outputs.commit }}
+          restore-keys: |
+            conan-linux-
+
+      - name: Cache ccache
+        if: steps.cache-native.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-linux-${{ steps.milvus-storage.outputs.commit }}
+          restore-keys: |
+            ccache-linux-
+
       - name: Install system dependencies
+        if: steps.cache-native.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential ccache libssl-dev pkg-config
 
       - name: Install CMake
+        if: steps.cache-native.outputs.cache-hit != 'true'
         run: |
           wget -qO- "https://cmake.org/files/v3.27/cmake-3.27.5-linux-x86_64.tar.gz" | \
             sudo tar --strip-components=1 -xz -C /usr/local
 
       - name: Install Conan
-        run: pip install conan==1.61.0
-
-      - name: Cache Conan packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.conan/data
-          key: conan-linux-${{ hashFiles('milvus-storage/cpp/conanfile.py') }}
-          restore-keys: |
-            conan-linux-
-
-      - name: Setup Conan profile
+        if: steps.cache-native.outputs.cache-hit != 'true'
         run: |
+          pip install conan==1.61.0
           conan profile new default --detect || true
           conan profile update settings.compiler.libcxx=libstdc++11 default
           conan remote add milvus https://milvus01.jfrog.io/artifactory/api/conan/default-conan-local --insert || true
 
-      - name: Cache ccache
-        uses: actions/cache@v4
-        with:
-          path: ~/.ccache
-          key: ccache-linux-${{ github.sha }}
-          restore-keys: |
-            ccache-linux-
-
       - name: Build milvus-storage C++ library
+        if: steps.cache-native.outputs.cache-hit != 'true'
         run: |
           cd milvus-storage/cpp
           make python-lib
+          mkdir -p ../python/milvus_storage/lib
+          cp build/Release/libmilvus-storage.so ../python/milvus_storage/lib/
         env:
           CCACHE_DIR: ~/.ccache
 
@@ -100,10 +122,7 @@ jobs:
           pip install "ray[data]>=2.51.1"
 
       - name: Setup milvus_storage Python package
-        run: |
-          mkdir -p milvus-storage/python/milvus_storage/lib
-          cp milvus-storage/cpp/build/Release/libmilvus-storage.so milvus-storage/python/milvus_storage/lib/
-          pip install -e milvus-storage/python/
+        run: pip install -e milvus-storage/python/
 
       - name: Install ray-milvus
         run: pip install -e .
@@ -142,40 +161,61 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install system dependencies
-        run: brew install cmake ccache
+      - name: Get milvus-storage commit ID
+        id: milvus-storage
+        run: |
+          echo "commit=$(git -C milvus-storage rev-parse HEAD)" >> $GITHUB_OUTPUT
 
-      - name: Install Conan
-        run: pip install conan==1.61.0
-
-      - name: Cache Conan packages
+      # Cache native library build artifacts
+      - name: Cache native library build
+        id: cache-native
         uses: actions/cache@v4
         with:
-          path: ~/.conan/data
-          key: conan-macos-${{ runner.arch }}-${{ hashFiles('milvus-storage/cpp/conanfile.py') }}
+          path: |
+            milvus-storage/cpp/build
+            milvus-storage/python/milvus_storage/lib
+          key: native-macos-${{ runner.arch }}-${{ steps.milvus-storage.outputs.commit }}
+
+      # Only restore Conan/ccache when native cache misses
+      - name: Cache Conan packages
+        if: steps.cache-native.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.conan
+          key: conan-macos-${{ runner.arch }}-${{ steps.milvus-storage.outputs.commit }}
           restore-keys: |
             conan-macos-${{ runner.arch }}-
 
       - name: Cache ccache
+        if: steps.cache-native.outputs.cache-hit != 'true'
         uses: actions/cache@v4
         with:
           path: ~/Library/Caches/ccache
-          key: ccache-macos-${{ runner.arch }}-${{ github.sha }}
+          key: ccache-macos-${{ runner.arch }}-${{ steps.milvus-storage.outputs.commit }}
           restore-keys: |
             ccache-macos-${{ runner.arch }}-
 
-      - name: Setup Conan profile
+      - name: Install system dependencies
+        if: steps.cache-native.outputs.cache-hit != 'true'
+        run: brew install cmake ccache
+
+      - name: Install Conan
+        if: steps.cache-native.outputs.cache-hit != 'true'
         run: |
+          pip install conan==1.61.0
           conan profile new default --detect || true
           conan profile update settings.compiler.libcxx=libc++ default
           conan remote add milvus https://milvus01.jfrog.io/artifactory/api/conan/default-conan-local --insert || true
 
       - name: Build milvus-storage C++ library
+        if: steps.cache-native.outputs.cache-hit != 'true'
         run: |
           cd milvus-storage/cpp
           WITH_AZURE=OFF make python-lib
+          mkdir -p ../python/milvus_storage/lib
+          cp build/Release/libmilvus-storage.dylib ../python/milvus_storage/lib/
         env:
-          CCACHE_DIR: ~/.ccache
+          CCACHE_DIR: ~/Library/Caches/ccache
 
       - name: Install Python dependencies
         run: |
@@ -183,10 +223,7 @@ jobs:
           pip install "ray[data]>=2.51.1"
 
       - name: Setup milvus_storage Python package
-        run: |
-          mkdir -p milvus-storage/python/milvus_storage/lib
-          cp milvus-storage/cpp/build/Release/libmilvus-storage.dylib milvus-storage/python/milvus_storage/lib/
-          pip install -e milvus-storage/python/
+        run: pip install -e milvus-storage/python/
 
       - name: Install ray-milvus
         run: pip install -e .

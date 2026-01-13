@@ -35,41 +35,87 @@ jobs:
         with:
           python-version: "3.10"
 
+      - name: Get milvus-storage commit ID
+        id: milvus-storage
+        run: |
+          echo "commit=$(git -C milvus-storage rev-parse HEAD)" >> $GITHUB_OUTPUT
+        shell: bash
+
+      # Cache native library build artifacts
+      - name: Cache native library build
+        id: cache-native
+        uses: actions/cache@v4
+        with:
+          path: |
+            milvus-storage/cpp/build
+            milvus-storage/python/milvus_storage/lib
+          key: native-wheel-${{ runner.os }}-${{ matrix.arch }}-${{ steps.milvus-storage.outputs.commit }}
+
+      # Only restore Conan/ccache when native cache misses (Linux/macOS)
+      - name: Cache Conan packages
+        if: runner.os != 'Windows' && steps.cache-native.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.conan
+          key: conan-wheel-${{ runner.os }}-${{ matrix.arch }}-${{ steps.milvus-storage.outputs.commit }}
+          restore-keys: |
+            conan-wheel-${{ runner.os }}-${{ matrix.arch }}-
+
+      - name: Cache ccache
+        if: runner.os != 'Windows' && steps.cache-native.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.ccache
+            ~/Library/Caches/ccache
+          key: ccache-wheel-${{ runner.os }}-${{ matrix.arch }}-${{ steps.milvus-storage.outputs.commit }}
+          restore-keys: |
+            ccache-wheel-${{ runner.os }}-${{ matrix.arch }}-
+
+      # Linux: Build native library if cache miss
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux' && steps.cache-native.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential ccache libssl-dev pkg-config
+          wget -qO- "https://cmake.org/files/v3.27/cmake-3.27.5-linux-x86_64.tar.gz" | sudo tar --strip-components=1 -xz -C /usr/local
+          pip install conan==1.61.0
+          conan profile new default --detect || true
+          conan profile update settings.compiler.libcxx=libstdc++11 default
+          conan remote add milvus https://milvus01.jfrog.io/artifactory/api/conan/default-conan-local --insert || true
+
+      - name: Build native library (Linux)
+        if: runner.os == 'Linux' && steps.cache-native.outputs.cache-hit != 'true'
+        run: |
+          cd milvus-storage/cpp
+          make python-lib
+          mkdir -p ../python/milvus_storage/lib
+          cp build/Release/libmilvus-storage.so ../python/milvus_storage/lib/
+        env:
+          CCACHE_DIR: ~/.ccache
+
+      # macOS: Build native library if cache miss
+      - name: Install build dependencies (macOS)
+        if: runner.os == 'macOS' && steps.cache-native.outputs.cache-hit != 'true'
+        run: |
+          brew install cmake ccache
+          pip install conan==1.61.0
+          conan profile new default --detect || true
+          conan profile update settings.compiler.libcxx=libc++ default
+          conan remote add milvus https://milvus01.jfrog.io/artifactory/api/conan/default-conan-local --insert || true
+
+      - name: Build native library (macOS)
+        if: runner.os == 'macOS' && steps.cache-native.outputs.cache-hit != 'true'
+        run: |
+          cd milvus-storage/cpp
+          WITH_AZURE=OFF make python-lib
+          mkdir -p ../python/milvus_storage/lib
+          cp build/Release/libmilvus-storage.dylib ../python/milvus_storage/lib/
+        env:
+          CCACHE_DIR: ~/Library/Caches/ccache
+
       - name: Install cibuildwheel
         run: pip install cibuildwheel==2.16.2
-
-      # Linux: Create cache directory and restore cache
-      - name: Create Conan cache directory (Linux)
-        if: runner.os == 'Linux'
-        run: mkdir -p ${{ github.workspace }}/.conan-cache
-
-      - name: Cache Conan packages (Linux)
-        if: runner.os == 'Linux'
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/.conan-cache
-          key: conan-wheel-linux-${{ matrix.arch }}-${{ hashFiles('milvus-storage/cpp/conanfile.py') }}
-          restore-keys: |
-            conan-wheel-linux-${{ matrix.arch }}-
-
-      # macOS: Cache in home directory
-      - name: Cache Conan packages (macOS)
-        if: runner.os == 'macOS'
-        uses: actions/cache@v4
-        with:
-          path: ~/.conan/data
-          key: conan-wheel-macos-${{ matrix.arch }}-${{ hashFiles('milvus-storage/cpp/conanfile.py') }}
-          restore-keys: |
-            conan-wheel-macos-${{ matrix.arch }}-
-
-      - name: Cache ccache (macOS)
-        if: runner.os == 'macOS'
-        uses: actions/cache@v4
-        with:
-          path: ~/Library/Caches/ccache
-          key: ccache-wheel-macos-${{ matrix.arch }}-${{ github.sha }}
-          restore-keys: |
-            ccache-wheel-macos-${{ matrix.arch }}-
 
       - name: Build wheels
         run: cibuildwheel --output-dir wheelhouse
@@ -78,48 +124,29 @@ jobs:
           CIBW_BUILD: cp310-* cp311-* cp312-*
           CIBW_SKIP: "*-musllinux*"
 
-          # Linux specific - mount host cache into container
+          # Linux: Skip C++ build (already done), just copy library
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux2014
-          CIBW_ENVIRONMENT_LINUX: >
-            CONAN_USER_HOME=/host/conan-cache
-            CCACHE_DIR=/host/ccache
-          CIBW_CONTAINER_ENGINE: "docker; create_args: -v ${{ github.workspace }}/.conan-cache:/host/conan-cache -v /tmp/ccache:/host/ccache"
           CIBW_BEFORE_ALL_LINUX: |
-            yum install -y epel-release
-            yum install -y git openssl-devel wget ccache
-            # Install CMake
-            wget -qO- "https://cmake.org/files/v3.27/cmake-3.27.5-linux-x86_64.tar.gz" | tar --strip-components=1 -xz -C /usr/local
-            # Install Conan
-            pip install conan==1.61.0
-            conan profile new default --detect || true
-            conan profile update settings.compiler.libcxx=libstdc++11 default
-            conan remote add milvus https://milvus01.jfrog.io/artifactory/api/conan/default-conan-local --insert || true
-            # Build C++ library
-            cd milvus-storage/cpp && make python-lib
-            # Copy library to Python package
-            mkdir -p ../python/milvus_storage/lib
-            cp build/Release/libmilvus-storage.so ../python/milvus_storage/lib/
+            # Library already built and cached on host, just ensure it's in place
+            if [ ! -f /project/milvus-storage/python/milvus_storage/lib/libmilvus-storage.so ]; then
+              echo "Error: Native library not found!"
+              exit 1
+            fi
 
           CIBW_REPAIR_WHEEL_COMMAND_LINUX: >
             auditwheel repair -w {dest_dir} {wheel} --plat manylinux2014_x86_64
 
-          # macOS specific
+          # macOS: Skip C++ build (already done)
           CIBW_BEFORE_ALL_MACOS: |
-            brew install cmake ccache
-            pip install conan==1.61.0
-            conan profile new default --detect || true
-            conan profile update settings.compiler.libcxx=libc++ default
-            conan remote add milvus https://milvus01.jfrog.io/artifactory/api/conan/default-conan-local --insert || true
-            # Build C++ library (without Azure support on macOS)
-            cd milvus-storage/cpp && WITH_AZURE=OFF make python-lib
-            # Copy library to Python package
-            mkdir -p ../python/milvus_storage/lib
-            cp build/Release/libmilvus-storage.dylib ../python/milvus_storage/lib/
+            if [ ! -f {project}/milvus-storage/python/milvus_storage/lib/libmilvus-storage.dylib ]; then
+              echo "Error: Native library not found!"
+              exit 1
+            fi
 
           CIBW_REPAIR_WHEEL_COMMAND_MACOS: >
             delocate-wheel --require-archs {delocate_archs} -w {dest_dir} {wheel}
 
-          # Windows specific - skip C++ build for now
+          # Windows: Skip C++ build
           CIBW_BUILD_WINDOWS: cp310-win_amd64
           CIBW_BEFORE_ALL_WINDOWS: |
             echo "Windows build - C++ library not yet supported"
