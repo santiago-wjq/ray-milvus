@@ -6,9 +6,10 @@ from typing import Dict, Iterator, List, Optional, Union
 
 import numpy as np
 import pyarrow as pa
-from milvus_storage import Reader
 from ray.data.block import Block, BlockMetadata
 from ray.data.datasource import Datasource, ReadTask
+
+from ray_milvus.milvus_storage import Reader
 
 
 class MilvusDatasource(Datasource):
