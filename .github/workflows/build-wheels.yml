@@ -35,25 +35,25 @@ jobs:
           path: |
             milvus-storage/cpp/build
             milvus-storage/python/milvus_storage/lib
-          key: native-wheel-linux-${{ steps.milvus-storage.outputs.commit }}
+          key: native-linux-${{ steps.milvus-storage.outputs.commit }}
 
       - name: Cache Conan packages
         if: steps.cache-native.outputs.cache-hit != 'true'
         uses: actions/cache@v4
         with:
           path: ~/.conan
-          key: conan-wheel-linux-${{ steps.milvus-storage.outputs.commit }}
+          key: conan-linux-${{ steps.milvus-storage.outputs.commit }}
           restore-keys: |
-            conan-wheel-linux-
+            conan-linux-
 
       - name: Cache ccache
         if: steps.cache-native.outputs.cache-hit != 'true'
         uses: actions/cache@v4
         with:
           path: ~/.ccache
-          key: ccache-wheel-linux-${{ steps.milvus-storage.outputs.commit }}
+          key: ccache-linux-${{ steps.milvus-storage.outputs.commit }}
           restore-keys: |
-            ccache-wheel-linux-
+            ccache-linux-
 
       - name: Install build dependencies
         if: steps.cache-native.outputs.cache-hit != 'true'
