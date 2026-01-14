@@ -5,9 +5,10 @@ Milvus datasink implementation for Ray Data.
 from typing import Any, Dict, Iterable, Optional
 
 import pyarrow as pa
-from milvus_storage import Writer
 from ray.data._internal.execution.interfaces import TaskContext
 from ray.data.datasource import Datasink
+
+from ray_milvus.milvus_storage import Writer
 
 
 class MilvusDatasink(Datasink):
